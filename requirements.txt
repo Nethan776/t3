@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn>=0.29
+edge-tts>=7.0.0
+# optional, for local AI replies:
+# requests>=2.31  # only needed if USE_OLLAMA=1

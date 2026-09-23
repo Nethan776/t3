@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Talk to ESP32</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#111; color:#eee; margin:0; padding:16px; }
+  .card { max-width:520px; margin:auto; background:#1c1c1e; border-radius:16px; padding:18px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { color:#aaa; font-size:13px; margin:0 0 12px; }
+  textarea { width:100%; height:90px; border-radius:12px; border:1px solid #333; background:#000; color:#fff; padding:10px; font-size:16px; }
+  .row { display:flex; gap:8px; margin-top:10px; }
+  button { flex:1; padding:14px; border-radius:12px; border:0; font-size:16px; font-weight:700; cursor:pointer; }
+  #micBtn { background:#0a84ff; color:white; }
+  #micBtn.listening { background:#ff3b30; }
+  #sendBtn { background:#30d158; color:#041; }
+  #testBtn { background:#333; color:#fff; flex:0.6; }
+  label.mode { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px; color:#ccc; }
+  #log { margin-top:12px; background:#000; border-radius:12px; padding:10px; min-height:120px; font-size:14px; white-space:pre-wrap; }
+  audio { width:100%; margin-top:10px; }
+  .hint { font-size:12px; color:#888; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎙️ Talk to ESP32</h1>
+  <p class="sub">Type or speak on phone → reply plays on ESP32 speaker (via laptop server)</p>
+  <textarea id="text" placeholder="Say something to your ESP32...">Hello ESP32, how are you?</textarea>
+  <div class="row">
+    <button id="micBtn">🎤 Tap to Speak</button>
+    <button id="sendBtn">Send ➤</button>
+  </div>
+  <div class="row">
+    <button id="testBtn">🔊 Test speaker</button>
+  </div>
+  <label class="mode"><input type="checkbox" id="repeatMode" /> Repeat mode (ESP32 repeats exactly what I say — walkie-talkie)</label>
+  <div id="modelBadge" style="margin-top:8px;font-size:13px;color:#8e8e93;">model: …</div>
+  <div id="log">Ready.\n</div>
+  <audio id="preview" controls></audio>
+  <div class="hint">Android Chrome: mic uses on-device speech recognition. iPhone Safari: mic button may not work — just type + Send. ESP32 plays audio ~1–2s later by polling /api/next.</div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const logBox = $('log'), txt = $('text'), preview = $('preview');
+
+function log(m){ logBox.textContent += m + "\n"; logBox.scrollTop = logBox.scrollHeight; }
+
+async function sendText(text){
+  text = (text||'').trim(); if(!text) return;
+  const now = Date.now();
+  // Debounce: ignore dupes within 2s (mic partials like "How" -> "How are you")
+  if(text === lastSent && now - lastSentAt < 2000) return;
+  if(inFlight) { log("(busy, skipped): "+text); return; }
+  inFlight = true;
+  lastSent = text; lastSentAt = now;
+  const mode = $('repeatMode').checked ? 'repeat' : 'reply';
+  log("YOU: " + text);
+  try{
+    const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, mode})});
+    const j = await r.json();
+    if(j.error){ log("ERR: "+j.error); return; }
+    log("ESP32 ("+j.version+" | "+(j.provider||"?")+"): " + j.reply);
+    $('modelBadge').textContent = "model: " + (j.provider||"?");
+    preview.src = j.audio_url; // optional phone preview; ESP32 will also play it
+    // preview.play().catch(()=>{});
+  }catch(e){ log("ERR: "+e); }
+  finally { inFlight = false; }
+}
+
+$('sendBtn').onclick = () => sendText(txt.value);
+$('testBtn').onclick = () => sendText("Hello! This is a speaker test from your ESP32.");
+
+// --- speech recognition (phone mic -> text, no server STT needed) ---
+let rec = null, listening = false, inFlight = false, lastSent = "", lastSentAt = 0;
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if(SR){
+  rec = new SR();
+  rec.lang = 'en-US'; rec.interimResults = false; rec.maxAlternatives = 1;
+  rec.onresult = e => {
+    // Only final results — ignore interim "How" before "How are you"
+    const res = e.results[0];
+    if(!res.isFinal) return;
+    const t = res[0].transcript;
+    txt.value = t;
+    log("HEARD: " + t);
+    try{ rec.stop(); }catch(_){}
+    sendText(t);
+  };
+  rec.onend = () => { listening=false; $('micBtn').classList.remove('listening'); $('micBtn').textContent='🎤 Tap to Speak'; };
+  rec.onerror = e => { log("MIC ERR: "+e.error+" — just type instead."); };
+  $('micBtn').onclick = () => {
+    if(listening){ rec.stop(); return; }
+    listening=true; $('micBtn').classList.add('listening'); $('micBtn').textContent='🔴 Listening... tap to stop';
+    try{ rec.start(); }catch(e){}
+  };
+} else {
+  $('micBtn').onclick = () => log("SpeechRecognition not supported on this browser. Type + Send. (Use Android Chrome for mic.)");
+  $('micBtn').textContent = "🎤 Mic not supported — type instead";
+}
+setInterval(async ()=>{
+  try{ const r = await fetch('/api/status'); const j = await r.json();
+    $('modelBadge').textContent = "model: " + (j.last_provider || (j.openrouter ? "openrouter:"+j.openrouter_model : "echo (no AI key)")) + " | esp32 seen: " + j.esp32_seen;
+  }catch(e){}
+}, 5000);
+</script>
+</body>
+</html>

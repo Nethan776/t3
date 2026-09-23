@@ -35,6 +35,7 @@
     <button id="testBtn">🔊 Test speaker</button>
   </div>
   <div id="sfxRow" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;"></div>
+  <div id="songRow" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
   <label class="mode"><input type="checkbox" id="repeatMode" /> Repeat mode (ESP32 repeats exactly what I say — walkie-talkie)</label>
   <div id="modelBadge" style="margin-top:8px;font-size:13px;color:#8e8e93;">model: …</div>
   <div id="log">Ready.\n</div>
@@ -80,7 +81,7 @@ async function playSfx(name){
     const j = await r.json();
     if(j.error){ log("ERR: "+j.error); return; }
     log("ESP32 ("+j.version+" | "+j.provider+"): " + j.reply);
-    preview.src = j.audio_url;
+    preview.src = j.audio_url + "?t=" + Date.now(); // stable URLs: bust phone cache
   }catch(e){ log("ERR: "+e); }
 }
 async function loadSfx(){
@@ -93,6 +94,23 @@ async function loadSfx(){
       b.style.cssText = "padding:8px 10px;border-radius:10px;border:0;background:#2c2c2e;color:#fff;font-size:13px;font-weight:700;";
       b.onclick = () => playSfx(n);
       row.appendChild(b);
+    });
+    const srow = $('songRow'); srow.innerHTML = "";
+    (j.songs||[]).forEach(n => {
+      const b = document.createElement('button');
+      b.textContent = "🎵 " + n;
+      b.style.cssText = "padding:10px 12px;border-radius:10px;border:0;background:#5e5ce6;color:#fff;font-size:13px;font-weight:700;";
+      b.onclick = async () => {
+        log("SONG: " + n);
+        try{
+          const r2 = await fetch('/api/song', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: n})});
+          const j2 = await r2.json();
+          if(j2.error){ log("ERR: "+j2.error); return; }
+          log("ESP32 ("+j2.version+" | "+j2.provider+"): " + j2.reply);
+          preview.src = j2.audio_url + "?t=" + Date.now(); // stable URLs: bust phone cache
+        }catch(e){ log("ERR: "+e); }
+      };
+      srow.appendChild(b);
     });
   }catch(e){}
 }

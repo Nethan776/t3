@@ -23,6 +23,7 @@ BASE = Path(__file__).parent
 AUDIO_DIR = BASE / "audio"
 STATIC_DIR = BASE / "static"
 SFX_DIR = BASE / "sfx"
+SONGS_DIR = BASE / "songs"  # song snippets: manual buttons only, never auto-played
 AUDIO_DIR.mkdir(exist_ok=True)
 STATIC_DIR.mkdir(exist_ok=True)
 SFX_DIR.mkdir(exist_ok=True)
@@ -392,13 +393,14 @@ async def index():
 @app.get("/api/status")
 async def status():
     sfx = sorted(f.stem for f in SFX_DIR.glob("*.mp3"))
+    songs = sorted(f.stem for f in SONGS_DIR.glob("*.mp3"))
     return {"version": VERSION, "last_reply": LAST_REPLY, "last_provider": LAST_PROVIDER,
             "last_audio_url": LAST_AUDIO_URL,
             "esp32_seen": LAST_ESP32_SEEN_VERSION,
             "ollama": USE_OLLAMA, "ollama_model": OLLAMA_MODEL, "voice": TTS_VOICE,
             "openrouter": bool(OPENROUTER_API_KEY), "openrouter_model": OPENROUTER_MODEL,
             "sfx": sfx, "idle_sfx": IDLE_SFX, "idle_after": IDLE_WHISTLE_AFTER,
-            "sfx_mode": "ai-tools" if OPENROUTER_API_KEY else "keywords"}
+            "songs": songs, "sfx_mode": "ai-tools" if OPENROUTER_API_KEY else "keywords"}
 
 
 @app.get("/api/next")
@@ -443,6 +445,24 @@ async def play_sfx(req: Request):
     print(f"[v{v}] (sfx:{name}) -> ESP32 PLAYS: {name}.mp3")
     return {"version": v, "audio_url": f"/sfx/{name}.mp3",
             "reply": _label, "provider": f"sfx:{name}"}
+
+
+@app.post("/api/song")
+async def play_song(req: Request):
+    """Play a song snippet on demand (phone buttons only — never idle/auto)."""
+    global LAST_PROVIDER
+    body = await req.json()
+    name = str(body.get("name", "")).strip().replace("/", "").replace("\\", "")
+    if name.endswith(".mp3"):
+        name = name[:-4]
+    if not name or not (SONGS_DIR / f"{name}.mp3").exists():
+        return JSONResponse({"error": f"unknown song: {name}"}, status_code=404)
+    with lock:
+        LAST_PROVIDER = f"song:{name}"
+    v = _publish(f"/songs/{name}.mp3", f"*WALL-E plays {name}*")
+    print(f"[v{v}] (song:{name}) -> ESP32 PLAYS: {name}.mp3")
+    return {"version": v, "audio_url": f"/songs/{name}.mp3",
+            "reply": f"*WALL-E plays {name}*", "provider": f"song:{name}"}
 
 
 @app.post("/api/chat")
@@ -518,9 +538,10 @@ async def played(req: Request):
     return {"ok": True}
 
 
-# serve mp3s + sfx
+# serve mp3s + sfx + songs
 app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 app.mount("/sfx", StaticFiles(directory=str(SFX_DIR)), name="sfx")
+app.mount("/songs", StaticFiles(directory=str(SONGS_DIR)), name="songs")
 
 if __name__ == "__main__":
     print("Open from phone: http://<LAPTOP-IP>:8000/  (find IP with `ipconfig`)")
